@@ -139,7 +139,7 @@ int main()
         }
             });
 
-    CROW_ROUTE(app, "/event").methods(crow::HTTPMethod::Get)
+    CROW_ROUTE(app, "/event/current").methods(crow::HTTPMethod::Get)
         ([]() {
         std::string current_time = getCurrentTime();
         connect();
@@ -279,10 +279,6 @@ int main()
 				return crow::response(400, "No tickets available for this event");
 			}
 
-            std::cout << "tickets available checked" << std::endl;
-            
-
-
 			ticket_table.insert("user_id", "event_id", "booking_date")
 				.values(user_id, event_id, date)
 				.execute();
@@ -298,6 +294,103 @@ int main()
             return crow::response(400, "An error occurred: " + std::string(e.what()));
         }
     });
+
+    CROW_ROUTE(app, "/ticket/").methods(crow::HTTPMethod::Get)
+    ([](const crow::request& req) {
+        
+        crow::query_string query_params = req.url_params;
+
+        int user_id = 0;
+        int event_id = 0;
+        if (query_params.get("user_id")) {
+            user_id = std::stoi(query_params.get("user_id"));
+        }
+        else {
+            return crow::response(400, "Missing user_id query parameter");
+        }
+
+        connect();
+
+        try {
+
+            mysqlx::Schema sch = session->getSchema("test");
+            mysqlx::Table ticket_table = sch.getTable("ticket");
+            mysqlx::Table user_table = sch.getTable("user");
+
+            // We check if user exists
+			mysqlx::RowResult user_result = user_table.select("id").where("id = :id").bind("id", user_id).execute();
+			if (user_result.count() == 0) {
+				return crow::response(400, "User does not exist");
+			}
+
+            //Get all tickets from user
+            mysqlx::RowResult result = ticket_table
+                .select("id", "event_id", "booking_date")
+                .execute();
+
+            nlohmann::json response_json = nlohmann::json::array();
+
+            for (mysqlx::Row row : result) {
+                nlohmann::json ticket;
+				ticket["id"] = row[0].get<int>();
+                ticket["event_id"] = row[1].get<int>();
+                ticket["booking_date"] = handle_date_field(row[2]);
+                response_json.push_back(ticket);
+            }
+            std::cout << response_json << std::endl;
+            return crow::response(200, response_json.dump());
+        }
+        catch (const mysqlx::Error& err) {
+            std::cerr << "MySQL Error: " << err.what() << std::endl;
+            return crow::response(500, "Database error");
+        }
+    });
+
+    CROW_ROUTE(app, "/event/").methods(crow::HTTPMethod::Get)
+        ([](const crow::request& req) {
+
+        crow::query_string query_params = req.url_params;
+
+        int event_id = 0;
+        if (query_params.get("event_id")) {
+            event_id = std::stoi(query_params.get("event_id"));
+        }
+        else {
+            return crow::response(400, "Missing event_id query parameter");
+        }
+
+        connect();
+
+        try {
+
+            mysqlx::Schema sch = session->getSchema("test");
+            mysqlx::Table event_table = sch.getTable("event");
+
+            // We get the event
+            mysqlx::RowResult event_result = event_table.select("id","event_name","location","date","max_tickets", "type").where("id = :id").bind("id", event_id).execute();
+            if (event_result.count() == 0) {
+                return crow::response(400, "Event id does not exist");
+            }
+
+			mysqlx::Row event_row = event_result.fetchOne();
+
+            nlohmann::json event;
+			event["id"] = event_row[0].get<int>();
+			event["event_name"] = event_row[1].get<std::string>();
+			event["location"] = event_row[2].get<std::string>();
+			event["date"] = handle_date_field(event_row[3]);
+			event["max_tickets"] = event_row[4].get<int>();
+			event["type"] = event_row[5].get<std::string>();
+
+            std::cout << event << std::endl;
+            return crow::response(200, event.dump());
+        }
+        catch (const mysqlx::Error& err) {
+            std::cerr << "MySQL Error: " << err.what() << std::endl;
+            return crow::response(500, "Database error");
+        }
+            });
+
 
     app.port(18080).multithreaded().run();
 }
