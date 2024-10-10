@@ -1,7 +1,6 @@
 
 #include <iostream>
 #include <string>
-#include <fmt/core.h>
 #include <crow.h>
 #include <nlohmann/json.hpp>
 #include <mysqlx/xdevapi.h>
@@ -175,7 +174,130 @@ int main()
             std::cerr << "MySQL Error: " << err.what() << std::endl;
             return crow::response(500, "Database error");
         }
-            });
+    });
+
+    CROW_ROUTE(app, "/user").methods(crow::HTTPMethod::Post)
+    ([](const crow::request& req){
+        try {
+            std::cout << "Received body: '" << req.body << "'" << std::endl;
+
+            if (req.body.empty()) {
+                std::cerr << "error: empty body received!" << std::endl;
+                return crow::response(400, "empty request body");
+            }
+
+            auto body_data = nlohmann::json::parse(req.body);
+
+            // Early return in case body does not have the necessary fields
+            if (!(body_data.contains("name") && body_data.contains("rol") && body_data.contains("email") && body_data.contains("password"))) {
+                return crow::response(400, "JSON does not contain all necessary fields");
+            }
+
+            std::string name = body_data["name"];
+            std::string rol = body_data["rol"];
+            std::string email = body_data["email"];
+            std::string password = body_data["password"];
+
+            //Re-establish conection to the DB
+            connect();
+
+            mysqlx::Schema sch = session->getSchema("test");
+            mysqlx::Table user_table = sch.getTable("user");
+
+            user_table.insert("name", "rol", "email", "password")
+				.values(name, rol, email, password) // We should hash the password before storing it
+                .execute();
+            return crow::response(200, "User created successfully!");
+        }
+        catch (const mysqlx::Error& err) {
+            std::cerr << "MySQL Error: " << err.what() << std::endl;
+            return crow::response(500, "Database error");
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Error parsing JSON: " << e.what() << std::endl;
+            return crow::response(400, "Invalid JSON format");
+        }
+    });
+
+    CROW_ROUTE(app, "/ticket/").methods(crow::HTTPMethod::Post)
+    ([](const crow::request & req) {
+        try {
+
+			crow::query_string query_params = req.url_params;
+
+            int user_id = 0;
+            int event_id = 0;
+            if (query_params.get("user_id")) {
+                user_id = std::stoi(query_params.get("user_id"));
+            }
+            else {
+                return crow::response(400, "Missing user_id query parameter");
+            }
+
+            if (query_params.get("event_id")) {
+                event_id = std::stoi(query_params.get("event_id"));
+            }
+            else {
+                return crow::response(400, "Missing event_id query parameter");
+            }
+
+            std::cout << "Received POST request for user_id: " << user_id << " and event_id: " << event_id << std::endl;
+
+			std::string date = getCurrentTime();
+
+
+            //Re-establish conection to the DB
+            connect();
+
+            mysqlx::Schema sch = session->getSchema("test");
+            mysqlx::Table event_table = sch.getTable("event");
+            mysqlx::Table user_table = sch.getTable("user");
+			mysqlx::Table ticket_table = sch.getTable("ticket");
+
+
+
+			//Check if the user exists
+			mysqlx::RowResult user_result = user_table.select("id").where("id = :id").bind("id", user_id).execute();
+			if (user_result.count() == 0) {
+				return crow::response(400, "User does not exist");
+			}
+
+			//Check if the event exists
+			mysqlx::RowResult event_result = event_table.select("id", "max_tickets").where("id = :id").bind("id", event_id).execute();
+			if (event_result.count() == 0) {
+				return crow::response(400, "Event does not exist");
+			}
+            
+            mysqlx::Row event_row = event_result.fetchOne();
+
+            int max_tickets = event_row[1].get<int>();
+
+			//Check if the event has tickets available
+			mysqlx::RowResult ticket_result = ticket_table.select("id").where("event_id = :event_id").bind("event_id", event_id).execute();
+            std::cout << "ticket table queried" << std::endl;
+			if (max_tickets <= ticket_result.count()) {
+				return crow::response(400, "No tickets available for this event");
+			}
+
+            std::cout << "tickets available checked" << std::endl;
+            
+
+
+			ticket_table.insert("user_id", "event_id", "booking_date")
+				.values(user_id, event_id, date)
+				.execute();
+
+            return crow::response(200, "ticket created successfully!");
+        }
+        catch (const mysqlx::Error& err) {
+            std::cerr << "MySQL Error: " << err.what() << std::endl;
+            return crow::response(500, "Database error");
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Error parsing JSON: " << e.what() << std::endl;
+            return crow::response(400, "An error occurred: " + std::string(e.what()));
+        }
+    });
 
     app.port(18080).multithreaded().run();
 }
