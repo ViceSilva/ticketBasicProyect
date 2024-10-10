@@ -1,0 +1,7 @@
+{
+  "dependencies": [
+    "crow",
+    "nlohmann-json",
+    "mysql-connector-cpp"
+  ]
+}
